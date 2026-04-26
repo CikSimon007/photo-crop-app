@@ -405,6 +405,7 @@ class MainWindow(QMainWindow):
         self.idx = 0
         self.states: dict[int, dict] = {}   # saved crop states
         self.exported: set[int] = set()
+        self.skipped: set[int] = set()
 
         self.original: Image.Image | None = None
         self.display_scale = 1.0
@@ -472,6 +473,14 @@ class MainWindow(QMainWindow):
         self.back_btn.clicked.connect(self._go_back)
         tb.addWidget(self.back_btn)
 
+        self.skip_btn = QPushButton("Preskocit  (S)")
+        self.skip_btn.setMinimumWidth(140)
+        self.skip_btn.setMinimumHeight(40)
+        self.skip_btn.setToolTip(
+            "Fotku neupravovat - nebude ulozena vo vystupnom priecinku")
+        self.skip_btn.clicked.connect(self._skip)
+        tb.addWidget(self.skip_btn)
+
         self.ok_btn = QPushButton("Potvrdit  (Enter)")
         self.ok_btn.setMinimumWidth(170)
         self.ok_btn.setMinimumHeight(40)
@@ -494,6 +503,7 @@ class MainWindow(QMainWindow):
     def _bind_shortcuts(self):
         QShortcut(QKeySequence(Qt.Key.Key_Return), self, self._confirm)
         QShortcut(QKeySequence(Qt.Key.Key_Enter), self, self._confirm)
+        QShortcut(QKeySequence(Qt.Key.Key_S), self, self._skip)
 
     # -- photo loading -------------------------------------------------------
 
@@ -598,7 +608,18 @@ class MainWindow(QMainWindow):
         self._save_state()
         self._export()
         self.exported.add(self.idx)
-        self.progress.setValue(len(self.exported))
+        self.skipped.discard(self.idx)
+        self._update_progress()
+        self.idx += 1
+        self._load_photo()
+
+    def _skip(self):
+        self._save_state()
+        if self.idx in self.exported:
+            self._remove_exported()
+            self.exported.discard(self.idx)
+        self.skipped.add(self.idx)
+        self._update_progress()
         self.idx += 1
         self._load_photo()
 
@@ -608,6 +629,9 @@ class MainWindow(QMainWindow):
         self._save_state()
         self.idx -= 1
         self._load_photo()
+
+    def _update_progress(self):
+        self.progress.setValue(len(self.exported) + len(self.skipped))
 
     # -- export --------------------------------------------------------------
 
@@ -642,14 +666,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Chyba pri ukladani",
                                 f"Nepodarilo sa ulozit: {path.name}\n{exc}")
 
+    def _remove_exported(self):
+        path = self.photos[self.idx]
+        out = Path(self.settings["output_dir"]) / path.name
+        try:
+            out.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     # -- finish / close ------------------------------------------------------
 
     def _finish(self):
+        saved = len(self.exported)
+        skipped = len(self.skipped)
+        msg = (f"Vsetky fotky ({len(self.photos)}) boli spracovane.\n"
+               f"Ulozene: {saved}    Preskocene: {skipped}\n\n"
+               f"Vystupny priecinok:\n{self.settings['output_dir']}\n\n"
+               "Chcete otvorit vystupny priecinok?")
         reply = QMessageBox.information(
-            self, "Hotovo!",
-            f"Vsetky fotky ({len(self.photos)}) boli spracovane.\n\n"
-            f"Vystupny priecinok:\n{self.settings['output_dir']}\n\n"
-            "Chcete otvorit vystupny priecinok?",
+            self, "Hotovo!", msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             import subprocess
@@ -662,7 +697,7 @@ class MainWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event):
-        remaining = len(self.photos) - len(self.exported)
+        remaining = len(self.photos) - len(self.exported) - len(self.skipped)
         if remaining > 0 and self.idx < len(self.photos):
             r = QMessageBox.question(
                 self, "Ukoncit?",
